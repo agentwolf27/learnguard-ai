@@ -1,0 +1,266 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  STUDENT
+  TEACHER
+  ADMIN
+}
+
+enum AuditAction {
+  LOGIN
+  PROMPT_SUBMITTED
+  PROMPT_BLOCKED
+  POLICY_CHANGED
+  DASHBOARD_ACCESSED
+  LTI_LAUNCH
+  DEEP_LINK_REQUESTED
+  AUTHORIZATION_DENIED
+  RATE_LIMITED
+}
+
+model School {
+  id             String          @id @default(cuid())
+  name           String
+  slug           String          @unique
+  domain         String?         @unique
+  users          User[]
+  courses        Course[]
+  deployments    LtiDeployment[]
+  promptLogs     PromptLog[]
+  insights       LearningInsight[]
+  usageMetrics   UsageMetric[]
+  auditLogs      AuditLog[]
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+}
+
+model User {
+  id                 String             @id @default(cuid())
+  clerkUserId        String?            @unique
+  canvasUserId       String?
+  name               String
+  email              String?
+  role               UserRole           @default(STUDENT)
+  schoolId           String
+  school             School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  taughtCourses      Course[]           @relation("CourseTeacher")
+  teachingAssignments Assignment[]       @relation("AssignmentTeacher")
+  promptLogs         PromptLog[]        @relation("StudentPromptLogs")
+  reviewedPromptLogs PromptLog[]        @relation("TeacherPromptLogs")
+  enrollments        CourseEnrollment[]
+  auditLogs          AuditLog[]
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  @@unique([schoolId, canvasUserId])
+  @@index([schoolId, role])
+  @@index([email])
+}
+
+model CourseEnrollment {
+  id        String   @id @default(cuid())
+  userId    String
+  courseId  String
+  role      UserRole @default(STUDENT)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  course    Course   @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, courseId])
+}
+
+model Course {
+  id             String             @id @default(cuid())
+  canvasCourseId String?
+  name           String
+  subjectArea    String
+  schoolId       String
+  teacherId      String?
+  school         School             @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  teacher        User?              @relation("CourseTeacher", fields: [teacherId], references: [id], onDelete: SetNull)
+  assignments    Assignment[]
+  promptLogs     PromptLog[]
+  enrollments    CourseEnrollment[]
+  insights       LearningInsight[]
+  usageMetrics   UsageMetric[]
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+
+  @@unique([schoolId, canvasCourseId])
+  @@index([schoolId, teacherId])
+  @@index([schoolId, subjectArea])
+}
+
+model Assignment {
+  id                  String            @id @default(cuid())
+  canvasAssignmentId  String?
+  title               String
+  dueAt               DateTime?
+  courseId            String
+  teacherId           String?
+  course              Course            @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  teacher             User?             @relation("AssignmentTeacher", fields: [teacherId], references: [id], onDelete: SetNull)
+  policy              AssignmentPolicy?
+  promptLogs          PromptLog[]
+  insights            LearningInsight[]
+  createdAt           DateTime          @default(now())
+  updatedAt           DateTime          @updatedAt
+
+  @@unique([courseId, canvasAssignmentId])
+  @@index([courseId, teacherId])
+}
+
+model LtiDeployment {
+  id                          String   @id @default(cuid())
+  issuer                      String
+  clientId                    String
+  deploymentId                String
+  jwksUrl                     String?
+  authLoginUrl                String?
+  authTokenUrl                String?
+  nrpsContextMembershipUrl    String?
+  agsLineItemsUrl             String?
+  schoolId                    String?
+  school                      School?  @relation(fields: [schoolId], references: [id], onDelete: SetNull)
+  createdAt                   DateTime @default(now())
+  updatedAt                   DateTime @updatedAt
+
+  @@unique([issuer, clientId, deploymentId])
+  @@index([schoolId])
+}
+
+model PromptLog {
+  id                      String                @id @default(cuid())
+  studentId               String
+  teacherId               String?
+  schoolId                String
+  courseId                String?
+  assignmentId            String?
+  originalPrompt          String
+  aiResponse              String
+  allowed                 Boolean
+  category                String
+  riskLevel               String
+  reason                  String
+  educationalAlternative  String
+  matchedPhrases          String                @default("[]")
+  estimatedTokens         Float
+  estimatedCO2Grams       Float
+  estimatedWaterML        Float
+  student                 User                  @relation("StudentPromptLogs", fields: [studentId], references: [id], onDelete: Cascade)
+  teacher                 User?                 @relation("TeacherPromptLogs", fields: [teacherId], references: [id], onDelete: SetNull)
+  school                  School                @relation(fields: [schoolId], references: [id], onDelete: Cascade)
+  course                  Course?               @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  assignment              Assignment?           @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
+  classification          PromptClassification?
+  createdAt               DateTime              @default(now())
+
+  @@index([studentId, createdAt])
+  @@index([schoolId, createdAt])
+  @@index([courseId, createdAt])
+  @@index([assignmentId, createdAt])
+  @@index([riskLevel, allowed])
+  @@index([schoolId, riskLevel, createdAt])
+  @@index([teacherId, createdAt])
+}
+
+model PromptClassification {
+  id                      String     @id @default(cuid())
+  promptLogId             String?    @unique
+  promptLog               PromptLog? @relation(fields: [promptLogId], references: [id], onDelete: Cascade)
+  flagged                 Boolean
+  matchedPhrases          String     @default("[]")
+  riskLevel               String
+  category                String
+  allowed                 Boolean
+  reason                  String
+  educationalAlternative  String
+  confidence              Float      @default(0)
+  createdAt               DateTime   @default(now())
+}
+
+model AssignmentPolicy {
+  id                         String     @id @default(cuid())
+  assignmentId               String     @unique
+  assignment                 Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  allowBrainstorming         Boolean    @default(true)
+  allowOutlining             Boolean    @default(true)
+  allowDraftFeedback         Boolean    @default(true)
+  allowConceptExplanation    Boolean    @default(true)
+  blockFullEssayGeneration   Boolean    @default(true)
+  blockFinalAnswers          Boolean    @default(true)
+  blockTestQuizSolving       Boolean    @default(true)
+  blockPlagiarismEvasion     Boolean    @default(true)
+  requireCitation            Boolean    @default(false)
+  createdAt                  DateTime   @default(now())
+  updatedAt                  DateTime   @updatedAt
+}
+
+model LearningInsight {
+  id                    String      @id @default(cuid())
+  schoolId              String?
+  courseId              String?
+  assignmentId          String?
+  subjectArea           String
+  concept               String
+  frequency             Int         @default(1)
+  studentStruggleScore  Float       @default(0.5)
+  summary               String
+  trend                 String      @default("stable")
+  school                School?     @relation(fields: [schoolId], references: [id], onDelete: SetNull)
+  course                Course?     @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  assignment            Assignment? @relation(fields: [assignmentId], references: [id], onDelete: SetNull)
+  createdAt             DateTime    @default(now())
+  updatedAt             DateTime    @updatedAt
+
+  @@index([schoolId, concept])
+  @@index([courseId, concept])
+  @@index([schoolId, subjectArea])
+}
+
+model UsageMetric {
+  id                String   @id @default(cuid())
+  schoolId          String?
+  courseId          String?
+  date              DateTime
+  totalPrompts      Int      @default(0)
+  activeStudents    Int      @default(0)
+  highRiskPrompts   Int      @default(0)
+  blockedPrompts    Int      @default(0)
+  learningSessions  Int      @default(0)
+  school            School?  @relation(fields: [schoolId], references: [id], onDelete: SetNull)
+  course            Course?  @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([schoolId, courseId, date])
+  @@index([schoolId, date])
+}
+
+model AuditLog {
+  id          String      @id @default(cuid())
+  schoolId    String?
+  userId      String?
+  clerkUserId String?
+  action      AuditAction
+  resource    String?
+  resourceId  String?
+  metadata    Json?
+  ipAddress   String?
+  userAgent   String?
+  requestId   String?
+  school      School?     @relation(fields: [schoolId], references: [id], onDelete: SetNull)
+  user        User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
+  createdAt   DateTime    @default(now())
+
+  @@index([schoolId, action, createdAt])
+  @@index([userId, createdAt])
+  @@index([clerkUserId, createdAt])
+}
